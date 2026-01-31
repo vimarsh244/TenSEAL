@@ -67,7 +67,7 @@ jobs:
             rm ${cmake_file}
           CIBW_ENVIRONMENT_LINUX: CC=clang CXX=clang++
           # Test the wheel after building
-          CIBW_TEST_COMMAND: python -c "import tenseal; print(f'TenSEAL version: {tenseal.__version__}')"
+          CIBW_TEST_COMMAND: "python -c \"import tenseal; print('TenSEAL version:', tenseal.__version__)\""
         with:
           package-dir: .
           output-dir: wheelhouse
@@ -107,7 +107,7 @@ jobs:
     name: Publish to GitHub Releases
     needs: combine-wheels
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_to_github)
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_to_github == 'true')
     permissions:
       contents: write
     steps:
@@ -164,7 +164,7 @@ jobs:
     name: Publish to PyPI
     needs: combine-wheels
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_to_pypi)
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_to_pypi == 'true')
     steps:
       - name: Download all wheels
         uses: actions/download-artifact@v4
