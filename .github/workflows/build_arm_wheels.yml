@@ -1,0 +1,187 @@
+name: Build ARM64 Linux Wheels
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_to_pypi:
+        description: 'Publish to PyPI'
+        required: false
+        default: false
+        type: boolean
+      publish_to_github:
+        description: 'Publish to GitHub Releases'
+        required: false
+        default: true
+        type: boolean
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+
+jobs:
+  build-arm64-wheels:
+    name: Build ARM64 wheel - Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - cp39
+          - cp310
+          - cp311
+          - cp312
+          - cp313
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up QEMU for ARM64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build ARM64 wheels using cibuildwheel
+        uses: pypa/cibuildwheel@v2.22.0
+        env:
+          CIBW_BUILD: ${{ matrix.python }}-manylinux_aarch64
+          CIBW_ARCHS_LINUX: aarch64
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+          CIBW_BUILD_VERBOSITY: 1
+          # Install build dependencies before building
+          CIBW_BEFORE_ALL_LINUX: |
+            yum install -y wget curl git automake libtool clang
+            # Install newer CMake
+            CMAKE_VERSION=3.28.0
+            ARCH=$(uname -m)
+            if [ "$ARCH" = "aarch64" ]; then
+              cmake_file="cmake-${CMAKE_VERSION}-linux-aarch64.sh"
+            else
+              cmake_file="cmake-${CMAKE_VERSION}-linux-x86_64.sh"
+            fi
+            wget https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/${cmake_file}
+            sh ${cmake_file} --skip-license --prefix=/usr/local/ --exclude-subdir
+            rm ${cmake_file}
+          CIBW_ENVIRONMENT_LINUX: CC=clang CXX=clang++
+          # Test the wheel after building
+          CIBW_TEST_COMMAND: python -c "import tenseal; print(f'TenSEAL version: {tenseal.__version__}')"
+        with:
+          package-dir: .
+          output-dir: wheelhouse
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tenseal-arm64-${{ matrix.python }}
+          path: ./wheelhouse/*.whl
+          retention-days: 30
+
+  # Combine all wheels into a single artifact
+  combine-wheels:
+    name: Combine ARM64 wheels
+    needs: build-arm64-wheels
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tenseal-arm64-*
+          path: all-wheels
+          merge-multiple: true
+
+      - name: List all wheels
+        run: ls -la all-wheels/
+
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tenseal-arm64-all-wheels
+          path: all-wheels/*.whl
+          retention-days: 90
+
+  # Publish to GitHub Releases
+  publish-github-release:
+    name: Publish to GitHub Releases
+    needs: combine-wheels
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_to_github)
+    permissions:
+      contents: write
+    steps:
+      - name: Download all wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: tenseal-arm64-all-wheels
+          path: wheels
+
+      - name: Get version
+        id: version
+        run: |
+          WHEEL_FILE=$(ls wheels/*.whl | head -1)
+          VERSION=$(echo $WHEEL_FILE | sed -E 's/.*tenseal-([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name || format('v{0}-arm64', steps.version.outputs.version) }}
+          name: TenSEAL ARM64 Wheels ${{ steps.version.outputs.version }}
+          body: |
+            ## ARM64 Linux Wheels for TenSEAL
+            
+            These wheels are built for ARM64 (aarch64) Linux systems including:
+            - **NVIDIA Jetson** (Orin NX, AGX Orin, Xavier NX, etc.)
+            - **Raspberry Pi 4/5** (64-bit OS)
+            - **Other ARM64 Linux devices**
+            
+            ### Compatibility
+            - **glibc**: 2.28+ (manylinux_2_28)
+            - **OS**: Ubuntu 20.04+, Debian 10+, JetPack 5+
+            - **Python**: 3.9, 3.10, 3.11, 3.12, 3.13
+            
+            ### Installation
+            ```bash
+            # Download the wheel for your Python version
+            pip install tenseal-*.whl
+            ```
+            
+            ### Verify Installation
+            ```python
+            import tenseal as ts
+            print(ts.__version__)
+            ```
+          files: wheels/*.whl
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publish to PyPI (optional)
+  publish-pypi:
+    name: Publish to PyPI
+    needs: combine-wheels
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_to_pypi)
+    steps:
+      - name: Download all wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: tenseal-arm64-all-wheels
+          path: wheels
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install twine
+        run: python -m pip install --upgrade twine
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
+          TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+        run: twine upload --repository pypi --skip-existing --verbose wheels/*.whl
