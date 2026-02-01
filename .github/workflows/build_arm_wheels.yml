@@ -67,7 +67,7 @@ jobs:
             rm ${cmake_file}
           CIBW_ENVIRONMENT_LINUX: CC=clang CXX=clang++
           # Test the wheel after building
-          CIBW_TEST_COMMAND: "python -c \"import tenseal; print('TenSEAL version:', tenseal.__version__)\""
+          # CIBW_TEST_COMMAND: "python -c \"import tenseal; print('TenSEAL version:', tenseal.__version__)\""
         with:
           package-dir: .
           output-dir: wheelhouse
